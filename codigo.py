@@ -1,105 +1,95 @@
 import pandas as pd
 import numpy as np
+import os
 from sklearn.linear_model import LinearRegression
 
-# ---------------------------------------------------------
-# 1. CONFIGURACIÓN Y CARGA DE DATOS
-# ---------------------------------------------------------
-# Nota: Siguiendo tus instrucciones, el código referencia los nombres de la Etapa 1,
-# pero internamente carga tus muestras '.txt' de la Etapa 2 para que funcione aquí.
-ARCHIVO_ENTRENAMIENTO = 'train_1.csv'  # En la demo usamos: 'train_2_500.txt'
-ARCHIVO_LLAVE = 'key_1.csv'            # En la demo usamos: 'key_2_500.txt'
 
-print("Cargando datos...")
+RUTA_DATA = './muestra'          
+RUTA_SALIDA = './submissions' 
 
-# Intentamos cargar los archivos. Si estás ejecutando esto en tu local,
-# asegúrate de que los nombres coincidan. Aquí uso los que subiste.
+ARCHIVO_TRAIN = 'train_1.csv'  
+ARCHIVO_KEY = 'key_1.csv'
+ARCHIVO_SUBMISSION = 'submission_un_caso_final.csv'
+
+os.makedirs(RUTA_SALIDA, exist_ok=True)
+
+print("--- INICIANDO PROCESO SISTÉMICO (CORRECCIÓN DEFINITIVA DE LÓGICA) ---")
+
+
+path_train = os.path.join(RUTA_DATA, ARCHIVO_TRAIN)
+path_key = os.path.join(RUTA_DATA, ARCHIVO_KEY)
+
+print(f"Cargando archivos CSV desde: {RUTA_DATA}...")
+
 try:
-    # Leemos los txt como si fueran los csv completos
-    train_df = pd.read_csv('./muestra/train_2_500.txt')
-    key_df = pd.read_csv('./muestra/key_2_500.txt')
+    train_df = pd.read_csv(path_train)
+    key_df = pd.read_csv(path_key)
 except FileNotFoundError:
-    print("No se encontraron los archivos de muestra. Asegúrate de tener los CSV.")
-    # Datos dummy por si acaso fallara la carga en otro entorno
-    train_df = pd.DataFrame() 
-    key_df = pd.DataFrame()
+    print(f"¡ERROR DE RUTA! Archivos no encontrados.")
+    exit()
 
-# ---------------------------------------------------------
-# 2. SELECCIÓN DE UN SOLO CASO (PÁGINA)
-# ---------------------------------------------------------
-# Seleccionamos la primera página del set de entrenamiento para el ejemplo.
-# En el archivo real hay 145k páginas.
-if not train_df.empty:
-    nombre_pagina_objetivo = train_df['Page'].iloc[0]
-    print(f"Procesando página: {nombre_pagina_objetivo}")
 
-    # Extraemos la serie de tiempo para esta página
-    # Quitamos la columna 'Page' para tener solo fechas y visitas
-    serie_entrenamiento = train_df[train_df['Page'] == nombre_pagina_objetivo].drop('Page', axis=1).T
-    serie_entrenamiento.columns = ['Visitas']
-    # Convertimos el índice a formato fecha
-    serie_entrenamiento.index = pd.to_datetime(serie_entrenamiento.index)
+print(">> Buscando una página con datos en ambos sets (Train y Key)...")
 
-    # ---------------------------------------------------------
-    # 3. PREPROCESAMIENTO (Módulo del Sistema)
-    # ---------------------------------------------------------
-    # Manejo de valores nulos (NaN): Los llenamos con 0 como sugiere la competencia
-    serie_entrenamiento['Visitas'] = serie_entrenamiento['Visitas'].fillna(0)
+# 1. Obtener una lista de páginas base del archivo KEY (sin la fecha)
+# CORRECCIÓN DEFINITIVA: rsplit('_', 1)[0] elimina solo el último '_Fecha'
+paginas_en_llave = key_df['Page'].apply(lambda x: x.rsplit('_', 1)[0]).unique()
 
-    # Ingeniería de Características (Feature Engineering)
-    # Creamos una variable numérica 'Dias' para que la regresión entienda el tiempo
-    serie_entrenamiento['Dias'] = (serie_entrenamiento.index - serie_entrenamiento.index[0]).days
+# 2. Buscar la primera página del TRAIN que coincida
+nombre_pagina = None
+for page_name_train in train_df['Page']:
+    page_base_name = page_name_train
     
-    X_train = serie_entrenamiento[['Dias']].values
-    y_train = serie_entrenamiento['Visitas'].values
+    # Comprobamos si el nombre base del train existe en la lista de nombres base de la llave
+    if page_base_name in paginas_en_llave:
+        nombre_pagina = page_name_train
+        break
 
-    # ---------------------------------------------------------
-    # 4. MODELADO (Simulación del Meta-Modelo)
-    # ---------------------------------------------------------
-    # Usamos Regresión Lineal para capturar la tendencia básica.
-    modelo = LinearRegression()
-    modelo.fit(X_train, y_train)
+if nombre_pagina is None:
+    # Si este error persiste, significa que las 500 páginas de train y key no se cruzan.
+    print("¡ERROR FATAL! No se encontró NINGUNA página en común para el análisis de 'un caso único'.")
+    print("La lógica de comparación es correcta. Revisa si los sets de datos de muestra son complementarios.")
+    exit()
 
-    # ---------------------------------------------------------
-    # 5. PREDICCIÓN (Forecasting)
-    # ---------------------------------------------------------
-    # Necesitamos predecir para las fechas que pide el archivo 'key'.
-    # El archivo key tiene el formato: NombrePagina_Fecha
-    
-    # Filtramos las llaves que corresponden a NUESTRA página objetivo
-    llaves_pagina = key_df[key_df['Page'].str.contains(nombre_pagina_objetivo, regex=False)].copy()
+print(f"\n>> Página seleccionada: {nombre_pagina}")
 
-    if llaves_pagina.empty:
-        print("Advertencia: No se encontraron llaves para esta página en el archivo de muestra.")
-    else:
-        # Extraer la fecha del string largo. (Los últimos 10 caracteres son YYYY-MM-DD)
-        llaves_pagina['Fecha'] = pd.to_datetime(llaves_pagina['Page'].apply(lambda x: x[-10:]))
-        fechas_futuras = llaves_pagina['Fecha']
+# Extracción y preprocesamiento de la serie temporal
+pagina_objetivo = train_df[train_df['Page'] == nombre_pagina].iloc[0]
+serie_temporal = pagina_objetivo.drop('Page')
+serie_temporal.index = pd.to_datetime(serie_temporal.index)
+serie_temporal = pd.to_numeric(serie_temporal, errors='coerce').fillna(0) 
 
-        # Preparamos los días futuros numéricamente (basado en el inicio de la serie)
-        dias_inicio = serie_entrenamiento.index[0]
-        dias_futuros = (fechas_futuras - dias_inicio).days.values.reshape(-1, 1)
+df_model = pd.DataFrame({'visitas': serie_temporal})
+df_model['dias'] = (df_model.index - df_model.index[0]).days
 
-        # Hacemos la predicción
-        predicciones = modelo.predict(dias_futuros)
-        
-        # Corrección: El tráfico no puede ser negativo
-        predicciones = np.maximum(predicciones, 0)
+X_train = df_model[['dias']].values
+y_train = df_model['visitas'].values
 
-        # ---------------------------------------------------------
-        # 6. GENERACIÓN DEL ARCHIVO DE ENVÍO (SUBMISSION)
-        # ---------------------------------------------------------
-        # Creamos el dataframe final con Id y Visitas
-        submission = pd.DataFrame({
-            'Id': llaves_pagina['Id'],
-            'Visits': predicciones
-        })
+model = LinearRegression()
+model.fit(X_train, y_train)
 
-        print("Predicción completada exitosamente para el caso.")
-        print(submission.head())
-        
-        # Guardar resultado (opcional)
-        # submission.to_csv('submission_1.csv', index=False)
+print(">> Generando predicciones para el periodo requerido...")
 
-else:
-    print("El dataframe de entrenamiento está vacío.")
+# Filtramos solo las llaves que corresponden a nuestra página objetivo
+llaves_caso = key_df[key_df['Page'].str.startswith(nombre_pagina, na=False)].copy()
+
+# Cálculo de días futuros
+llaves_caso['Fecha'] = pd.to_datetime(llaves_caso['Page'].apply(lambda x: x[-10:]))
+fecha_inicio = df_model.index[0]
+dias_futuros = (llaves_caso['Fecha'] - fecha_inicio).days.values.reshape(-1, 1)
+
+predicciones = model.predict(dias_futuros)
+predicciones = np.maximum(predicciones, 0) 
+
+submission = pd.DataFrame({
+    'Id': llaves_caso['Id'],
+    'Visits': predicciones
+})
+
+path_guardado = os.path.join(RUTA_SALIDA, ARCHIVO_SUBMISSION)
+submission.to_csv(path_guardado, index=False)
+
+print(f"\n>> ¡PROCESO FINALIZADO CON ÉXITO!")
+print(f"Archivo de submission para '{nombre_pagina}' guardado en: {path_guardado}")
+print("Muestra de la salida:")
+print(submission.head())
